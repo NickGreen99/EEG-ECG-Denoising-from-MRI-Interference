@@ -1,12 +1,13 @@
 import time
+import random
 from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
-from resunet import DeepDSP_UNetRes
 
 class L1L2Loss(nn.Module):
     def __init__(self, l2_weight: float = 0.1):
@@ -18,64 +19,49 @@ class L1L2Loss(nn.Module):
     def forward(self, pred, target):
         return self.l1(pred, target) + self.l2_w * self.l2(pred, target)
 
-# ───────────────────────────────────────────────
-#                Dataset definition
-# ───────────────────────────────────────────────
 class EEGDenoiseDataset(Dataset):
-    def __init__(self, root_dir: str | Path):
+    """Each element of `roots` is one subject folder containing clean.npy, noise.npy, dirty.npy."""
+    def __init__(self, roots):
+        # allow passing a single path or a list of paths
+        if isinstance(roots, (str, Path)):
+            roots = [roots]
         self.samples = []
-        root_dir = Path(root_dir)
-
-        for subj in sorted(root_dir.glob("*")):
-            if not subj.is_dir():
-                continue
+        
+        for subj in roots:
+            subj = Path(subj)
             try:
-                clean = np.load(subj / "clean.npy")    # shape: (N, ch, T)
+                clean = np.load(subj / "clean.npy")   # shape (N_epochs, n_ch, T)
                 noise = np.load(subj / "noise.npy")
                 dirty = np.load(subj / "dirty.npy")
             except FileNotFoundError as e:
                 print(f"Skipping {subj.name}: {e}")
                 continue
 
+            # for each epoch and each channel, build (noisy+clean, noise) → clean
             for d_ep, n_ep, c_ep in zip(dirty, noise, clean):
                 for ch in range(d_ep.shape[0]):
-                    x = np.stack([c_ep[ch]+n_ep[ch], n_ep[ch]], axis=0)  # (2, T)
-                    y = c_ep[ch][None, ...]                    # (1, T)
-                    self.samples.append((x.astype(np.float32),
-                                          y.astype(np.float32)))
+                    x = np.stack([n_ep[ch]+c_ep[ch],        # use the *actual* dirty signal
+                                  n_ep[ch]       # pure noise
+                                 ], axis=0).astype(np.float32)
+                    y = c_ep[ch][None].astype(np.float32)
+                    self.samples.append((x, y))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         x, y = self.samples[idx]
-
-        m  = x.mean()                    # one μ, one σ for the whole sample
+        m  = x.mean()
         sd = x.std() + 1e-8
-        x  = (x - m) / sd
-        y  = (y - m) / sd               # y must use the *same* μ/σ
-
+        x = (x - m) / sd
+        y = (y - m) / sd
         return torch.from_numpy(x), torch.from_numpy(y)
-        # Normalize per-sample (z-score)
-        # def normalize(z):
-        #     mean = z.mean(axis=1, keepdims=True)
-        #     std  = z.std(axis=1, keepdims=True) + 1e-8
-        #     return (z - mean) / std
 
-        # x = normalize(x)
-        # y = normalize(y)
-
-        #return torch.from_numpy(x), torch.from_numpy(y)
-
-
-# ───────────────────────────────────────────────
-#                   Training
-# ───────────────────────────────────────────────
 def train(
-    root_dir="data_segmented/",
+    root_dir="/content/drive/MyDrive/data_segmented/data_segmented",
     batch_size=32,
-    epochs=30,
-    lr=2e-4,
+    epochs=10,
+    lr=2e-5,
     log_dir="runs/denoise",
     val_split=0.1,
     model_save_path="best_model.pt",
@@ -83,75 +69,77 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device used:", device)
 
-    # Load dataset and split by sample
-    full_dataset = EEGDenoiseDataset(root_dir)
-    val_size = int(len(full_dataset) * val_split)
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    print(f"Train size: {train_size} | Validation size: {val_size}")
+    root_dir = Path(root_dir)
+    subj_dirs = sorted([p for p in root_dir.iterdir() if p.is_dir()])
+    random.seed(0)
+    random.shuffle(subj_dirs)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, drop_last=True, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, drop_last=False, pin_memory=True)
+    n_val = max(1, int(val_split * len(subj_dirs)))
+    val_subj   = subj_dirs[:n_val]
+    train_subj = subj_dirs[n_val:]
+    print(f"Training on {len(train_subj)} subjects; validating on {len(val_subj)} subjects")
 
-    # Model, loss, optimizer
-    model = DeepDSP_UNetRes().to(device)
+    train_ds = EEGDenoiseDataset(train_subj)
+    val_ds   = EEGDenoiseDataset(val_subj)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                          num_workers=2, pin_memory=True, drop_last=True)
+    val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
+                          num_workers=2, pin_memory=True)
+
+    model     = DeepDSP_UNetRes(in_channels=2, out_channels=1).to(device)
     criterion = L1L2Loss(l2_weight=0.1).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # TensorBoard
     ts = time.strftime("%Y%m%d-%H%M%S")
     writer = SummaryWriter(Path(log_dir) / ts)
 
-    best_val_loss = float("inf")  # initialize
+    best_val_loss = float("inf")
     global_step = 0
+
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
 
-        for batch_idx, (x, y) in enumerate(train_loader, 1):
+        for batch_idx, (x, y) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad()
-
-            pred_noise = model(x) # We predict noise
-            cleaned_output = x[:,0:1,:] - pred_noise # And subtract it from the dirty input
+            pred_noise = model(x)
+            cleaned_output = x[:, 0:1, :] - pred_noise
             loss = criterion(cleaned_output, y)
 
             loss.backward()
             optimizer.step()
 
             writer.add_scalar("Loss/batch", loss.item(), global_step)
-            global_step += 1
             running_loss += loss.item()
+            global_step += 1
 
             if batch_idx % 500 == 0:
                 print(
                     f"Epoch {epoch:02d}/{epochs}  "
-                    f"Batch {batch_idx:04d}/{len(train_loader)}  "
+                    f"Batch {batch_idx:04d}/{len(train_dl):04d}  "
                     f"Loss {loss.item():.6f}"
                 )
 
-        # Epoch summary
-        train_epoch_loss = running_loss / len(train_loader)
+        train_epoch_loss = running_loss / len(train_dl)
         writer.add_scalar("Loss/epoch", train_epoch_loss, epoch)
         print(f"[{epoch:02d}/{epochs}]  Train avg_loss={train_epoch_loss:.6f}")
 
-        # ───── Validation Pass ─────
+        # Validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for x, y in val_loader:
+            for x, y in val_dl:
                 x, y = x.to(device), y.to(device)
                 pred_noise = model(x)
-                cleaned_output = x[:,0:1,:] - pred_noise
-                loss = criterion(cleaned_output, y)
-                val_loss += loss.item()
+                cleaned_output = x[:, 0:1, :] - pred_noise
+                val_loss += criterion(cleaned_output, y).item()
 
-        val_epoch_loss = val_loss / len(val_loader)
+        val_epoch_loss = val_loss / len(val_dl)
         writer.add_scalar("Loss/val_epoch", val_epoch_loss, epoch)
         print(f"[{epoch:02d}/{epochs}]  Validation avg_loss={val_epoch_loss:.6f}")
 
-        # Save best model
         if val_epoch_loss < best_val_loss:
             best_val_loss = val_epoch_loss
             torch.save(model.state_dict(), model_save_path)
@@ -159,25 +147,21 @@ def train(
 
     writer.close()
 
-    # ───── Final Visual Inspection ─────
+    # Visual check
     print("\nVisualizing predictions from best model...")
     model.load_state_dict(torch.load(model_save_path))
     model.eval()
-
     with torch.no_grad():
-        for x, y in val_loader:
+        for x, y in val_dl:
             x, y = x.to(device), y.to(device)
             pred_noise = model(x)
-            cleaned = x[:,0:1,:] - pred_noise
+            cleaned = x[:, 0:1, :] - pred_noise
 
-            # Pick first sample from batch
-            i = 0
             t = np.arange(y.shape[-1])
-
             plt.figure(figsize=(10, 4))
-            plt.plot(t, y[i,0].cpu(), label="Ground-truth clean")
-            plt.plot(t, cleaned[i,0].cpu(), label="Model cleaned")
-            plt.plot(t, x[i,0].cpu(), label="Dirty (input)", alpha=0.4)
+            plt.plot(t, y[0, 0].cpu(), label="Ground-truth clean")
+            plt.plot(t, cleaned[0, 0].cpu(), label="Model cleaned")
+            plt.plot(t, x[0, 0].cpu(), label="Dirty (input)", alpha=0.4)
             plt.title("EEG Denoising (1 Sample)")
             plt.xlabel("Time (samples)")
             plt.ylabel("µV")
@@ -185,7 +169,7 @@ def train(
             plt.grid(True)
             plt.tight_layout()
             plt.show()
-            break  # only show one batch
+            break
 
 if __name__ == "__main__":
     train()
