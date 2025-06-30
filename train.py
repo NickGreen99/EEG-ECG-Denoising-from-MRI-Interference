@@ -6,8 +6,17 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, random_split
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
-
 from resunet import DeepDSP_UNetRes
+
+class L1L2Loss(nn.Module):
+    def __init__(self, l2_weight: float = 0.1):
+        super().__init__()
+        self.l2_w = l2_weight
+        self.l1   = nn.L1Loss()
+        self.l2   = nn.MSELoss()
+
+    def forward(self, pred, target):
+        return self.l1(pred, target) + self.l2_w * self.l2(pred, target)
 
 # ───────────────────────────────────────────────
 #                Dataset definition
@@ -41,25 +50,31 @@ class EEGDenoiseDataset(Dataset):
     def __getitem__(self, idx):
         x, y = self.samples[idx]
 
-        # Normalize per-sample (z-score)
-        def normalize(z):
-            mean = z.mean(axis=1, keepdims=True)
-            std  = z.std(axis=1, keepdims=True) + 1e-8
-            return (z - mean) / std
-
-        x = normalize(x)
-        #y = normalize(y)
+        m  = x.mean()                    # one μ, one σ for the whole sample
+        sd = x.std() + 1e-8
+        x  = (x - m) / sd
+        y  = (y - m) / sd               # y must use the *same* μ/σ
 
         return torch.from_numpy(x), torch.from_numpy(y)
+        # Normalize per-sample (z-score)
+        # def normalize(z):
+        #     mean = z.mean(axis=1, keepdims=True)
+        #     std  = z.std(axis=1, keepdims=True) + 1e-8
+        #     return (z - mean) / std
+
+        # x = normalize(x)
+        # y = normalize(y)
+
+        #return torch.from_numpy(x), torch.from_numpy(y)
 
 
 # ───────────────────────────────────────────────
 #                   Training
 # ───────────────────────────────────────────────
 def train(
-    root_dir="/content/drive/MyDrive/data_segmented/data_segmented",
+    root_dir="data_segmented/",
     batch_size=32,
-    epochs=4,
+    epochs=30,
     lr=2e-4,
     log_dir="runs/denoise",
     val_split=0.1,
@@ -80,7 +95,7 @@ def train(
 
     # Model, loss, optimizer
     model = DeepDSP_UNetRes().to(device)
-    criterion = nn.L1Loss()
+    criterion = L1L2Loss(l2_weight=0.1).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     # TensorBoard
@@ -97,8 +112,11 @@ def train(
             x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad()
-            y_hat = model(x)
-            loss = criterion(y_hat, y)
+
+            pred_noise = model(x) # We predict noise
+            cleaned_output = x[:,0:1,:] - pred_noise # And subtract it from the dirty input
+            loss = criterion(cleaned_output, y)
+
             loss.backward()
             optimizer.step()
 
@@ -124,8 +142,9 @@ def train(
         with torch.no_grad():
             for x, y in val_loader:
                 x, y = x.to(device), y.to(device)
-                y_hat = model(x)
-                loss = criterion(y_hat, y)
+                pred_noise = model(x)
+                cleaned_output = x[:,0:1,:] - pred_noise
+                loss = criterion(cleaned_output, y)
                 val_loss += loss.item()
 
         val_epoch_loss = val_loss / len(val_loader)
@@ -148,15 +167,17 @@ def train(
     with torch.no_grad():
         for x, y in val_loader:
             x, y = x.to(device), y.to(device)
-            y_hat = model(x)
+            pred_noise = model(x)
+            cleaned = x[:,0:1,:] - pred_noise
 
             # Pick first sample from batch
             i = 0
             t = np.arange(y.shape[-1])
 
             plt.figure(figsize=(10, 4))
-            plt.plot(t, y[i, 0].cpu(), label="Ground Truth")
-            plt.plot(t, y_hat[i, 0].cpu(), label="Prediction")
+            plt.plot(t, y[i,0].cpu(), label="Ground-truth clean")
+            plt.plot(t, cleaned[i,0].cpu(), label="Model cleaned")
+            plt.plot(t, x[i,0].cpu(), label="Dirty (input)", alpha=0.4)
             plt.title("EEG Denoising (1 Sample)")
             plt.xlabel("Time (samples)")
             plt.ylabel("µV")

@@ -24,7 +24,7 @@ def epoch_data(eeg_segment, window_size_time):
 
 def eeg_read(vhdr_file):
     
-    window_size_time = 0.125
+    window_size_time = 3 * 0.125 # 3 TR (more context)
 
     chs = [
     'Fp1','Fp2','F3','F4','C3','C4','P3','P4','O1','O2',

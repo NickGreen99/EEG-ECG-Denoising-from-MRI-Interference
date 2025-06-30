@@ -6,18 +6,18 @@ import torch.nn.functional as F
 # class ResBlock1D(nn.Module):
 #     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias =True):
 #         super().__init__()
-#         self.conv1 = nn.Conv1d(in_channels = in_channels, 
-#                                out_channels = out_channels, 
-#                                kernel_size = kernel_size, 
-#                                stride = stride, 
-#                                padding = padding, 
+#         self.conv1 = nn.Conv1d(in_channels = in_channels,
+#                                out_channels = out_channels,
+#                                kernel_size = kernel_size,
+#                                stride = stride,
+#                                padding = padding,
 #                                bias=bias)
 #         self.relu = nn.ReLU(inplace=True)
-#         self.conv2 = nn.Conv1d(in_channels = in_channels, 
-#                                out_channels = out_channels, 
-#                                kernel_size = kernel_size, 
-#                                stride = stride, 
-#                                padding = padding, 
+#         self.conv2 = nn.Conv1d(in_channels = in_channels,
+#                                out_channels = out_channels,
+#                                kernel_size = kernel_size,
+#                                stride = stride,
+#                                padding = padding,
 #                                bias = bias)
 
 #     def forward(self, x):
