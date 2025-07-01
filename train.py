@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 
+from resunet import DeepDSP_UNetRes
+
 class L1L2Loss(nn.Module):
     def __init__(self, l2_weight: float = 0.1):
         super().__init__()
@@ -58,9 +60,9 @@ class EEGDenoiseDataset(Dataset):
         return torch.from_numpy(x), torch.from_numpy(y)
 
 def train(
-    root_dir="/content/drive/MyDrive/data_segmented/data_segmented",
+    root_dir="data_segmented/",
     batch_size=32,
-    epochs=10,
+    epochs=40,
     lr=2e-5,
     log_dir="runs/denoise",
     val_split=0.1,
@@ -146,30 +148,6 @@ def train(
             print(f">>> Saved new best model with val_loss={best_val_loss:.6f}")
 
     writer.close()
-
-    # Visual check
-    print("\nVisualizing predictions from best model...")
-    model.load_state_dict(torch.load(model_save_path))
-    model.eval()
-    with torch.no_grad():
-        for x, y in val_dl:
-            x, y = x.to(device), y.to(device)
-            pred_noise = model(x)
-            cleaned = x[:, 0:1, :] - pred_noise
-
-            t = np.arange(y.shape[-1])
-            plt.figure(figsize=(10, 4))
-            plt.plot(t, y[0, 0].cpu(), label="Ground-truth clean")
-            plt.plot(t, cleaned[0, 0].cpu(), label="Model cleaned")
-            plt.plot(t, x[0, 0].cpu(), label="Dirty (input)", alpha=0.4)
-            plt.title("EEG Denoising (1 Sample)")
-            plt.xlabel("Time (samples)")
-            plt.ylabel("µV")
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
-            plt.show()
-            break
 
 if __name__ == "__main__":
     train()
