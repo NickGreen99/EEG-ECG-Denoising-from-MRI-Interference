@@ -1,6 +1,7 @@
 # Ignore all data files
 data_raw/
 data_segmented/
+current_study_data_raw/
 
 # Ignore tensorboard info
 runs/
