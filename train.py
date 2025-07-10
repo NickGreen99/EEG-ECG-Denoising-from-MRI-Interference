@@ -5,11 +5,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import matplotlib.pyplot as plt
-
+from datasets import EEGDenoiseDataset
 from resunet import DeepDSP_UNetRes
+ 
 
 class L1L2Loss(nn.Module):
     def __init__(self, l2_weight: float = 0.1):
@@ -21,48 +21,10 @@ class L1L2Loss(nn.Module):
     def forward(self, pred, target):
         return self.l1(pred, target) + self.l2_w * self.l2(pred, target)
 
-class EEGDenoiseDataset(Dataset):
-    """Each element of `roots` is one subject folder containing clean.npy, noise.npy, dirty.npy."""
-    def __init__(self, roots):
-        # allow passing a single path or a list of paths
-        if isinstance(roots, (str, Path)):
-            roots = [roots]
-        self.samples = []
-        
-        for subj in roots:
-            subj = Path(subj)
-            try:
-                clean = np.load(subj / "clean.npy")   # shape (N_epochs, n_ch, T)
-                noise = np.load(subj / "noise.npy")
-                dirty = np.load(subj / "dirty.npy")
-            except FileNotFoundError as e:
-                print(f"Skipping {subj.name}: {e}")
-                continue
-
-            # for each epoch and each channel, build (noisy+clean, noise) → clean
-            for d_ep, n_ep, c_ep in zip(dirty, noise, clean):
-                for ch in range(d_ep.shape[0]):
-                    x = np.stack([n_ep[ch]+c_ep[ch],        # use the *actual* dirty signal
-                                  n_ep[ch]       # pure noise
-                                 ], axis=0).astype(np.float32)
-                    y = c_ep[ch][None].astype(np.float32)
-                    self.samples.append((x, y))
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        x, y = self.samples[idx]
-        m  = x.mean()
-        sd = x.std() + 1e-8
-        x = (x - m) / sd
-        y = (y - m) / sd
-        return torch.from_numpy(x), torch.from_numpy(y)
-
 def train(
-    root_dir="data_segmented/",
+    root_dir="/content/drive/MyDrive/data_segmented/data_segmented",
     batch_size=32,
-    epochs=40,
+    epochs=2,
     lr=2e-5,
     log_dir="runs/denoise",
     val_split=0.1,
@@ -88,8 +50,8 @@ def train(
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                           num_workers=2, pin_memory=True)
 
-    model     = DeepDSP_UNetRes(in_channels=2, out_channels=1).to(device)
-    criterion = L1L2Loss(l2_weight=0.1).to(device)
+    model     = DeepDSP_UNetRes(in_channels=3, out_channels=1).to(device)
+    criterion = nn.MSELoss().to(device)#L1L2Loss(l2_weight=0.1).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -102,13 +64,12 @@ def train(
         model.train()
         running_loss = 0.0
 
-        for batch_idx, (x, y) in enumerate(train_dl, 1):
+        for batch_idx, (x, y, _, _, _, _,_) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad()
-            pred_noise = model(x)
-            cleaned_output = x[:, 0:1, :] - pred_noise
-            loss = criterion(cleaned_output, y)
+            pred_eeg = model(x)
+            loss = criterion(pred_eeg, y)
 
             loss.backward()
             optimizer.step()
@@ -132,11 +93,10 @@ def train(
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for x, y in val_dl:
+            for x, y, _, _, _, _,_ in val_dl:
                 x, y = x.to(device), y.to(device)
-                pred_noise = model(x)
-                cleaned_output = x[:, 0:1, :] - pred_noise
-                val_loss += criterion(cleaned_output, y).item()
+                pred_eeg = model(x)
+                val_loss += criterion(pred_eeg, y).item()
 
         val_epoch_loss = val_loss / len(val_dl)
         writer.add_scalar("Loss/val_epoch", val_epoch_loss, epoch)
@@ -150,4 +110,5 @@ def train(
     writer.close()
 
 if __name__ == "__main__":
+    #print('jk')
     train()

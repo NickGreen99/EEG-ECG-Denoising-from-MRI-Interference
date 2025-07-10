@@ -47,7 +47,7 @@ def eeg_read(vhdr_file):
     raw.set_annotations(None)
     
     clean_segments = []
-    dirty_segments = []
+    contaminated_segments = []
     noise_segments = []
 
     # Clean Array Writing
@@ -69,34 +69,34 @@ def eeg_read(vhdr_file):
     del clean_segments
     gc.collect()
 
-    # Dirty Array Writing
-    print('#### Writing Dirty Segments ... ####')
-    for dirty_time_slot in subject_segments[subject_id]['dirty']:
-        dirty_seg = raw.copy().crop(tmin=dirty_time_slot[0], tmax=dirty_time_slot[1])
-        dirty_data = epoch_data(dirty_seg, window_size_time)
-        dirty_segments.append(dirty_data)
+    # contaminated Array Writing
+    print('#### Writing Contaminated Segments ... ####')
+    for contaminated_time_slot in subject_segments[subject_id]['contaminated']:
+        contaminated_seg = raw.copy().crop(tmin=contaminated_time_slot[0], tmax=contaminated_time_slot[1])
+        contaminated_data = epoch_data(contaminated_seg, window_size_time)
+        contaminated_segments.append(contaminated_data)
 
         # Keep only the noise
-        noise_proxy_seg = dirty_seg.filter(l_freq=100., h_freq=250., fir_design='firwin', verbose=False)
+        noise_proxy_seg = contaminated_seg.filter(l_freq=100., h_freq=250., fir_design='firwin', verbose=False)
         noise_data = epoch_data(noise_proxy_seg, window_size_time)
         noise_segments.append(noise_data)
 
-        del dirty_seg, noise_proxy_seg, dirty_data, noise_data
+        del contaminated_seg, noise_proxy_seg, contaminated_data, noise_data
         gc.collect()
 
     # Concatenate all epochs along axis 0 (n_epochs)
-    dirty_segments = np.concatenate(dirty_segments, axis=0)
+    contaminated_segments = np.concatenate(contaminated_segments, axis=0)
     noise_segments = np.concatenate(noise_segments, axis=0)
 
-    # Save subject's dirty.npy
-    out_path = SUBJECT_DIR / 'dirty.npy'
-    np.save(out_path, dirty_segments)
+    # Save subject's contaminated.npy
+    out_path = SUBJECT_DIR / 'contaminated.npy'
+    np.save(out_path, contaminated_segments)
 
     # Save subject's noise.npy
     out_path = SUBJECT_DIR / 'noise.npy'
     np.save(out_path, noise_segments)
        
-    del dirty_segments, noise_segments
+    del contaminated_segments, noise_segments
     gc.collect()
 
 def main():
