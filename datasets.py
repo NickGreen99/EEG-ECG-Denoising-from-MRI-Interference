@@ -26,11 +26,11 @@ class EEGDenoiseDataset(Dataset):
         if isinstance(roots, (str, Path)):
             roots = [roots]
         # Load watermelon data
-        noise_root_dir="/content/drive/MyDrive/data_segmented/data_segmented"
-        noise_data = noise_root_dir / "watermelon.npy"
-        noise = np.load(noise_data, mmap_mode="r")
+        # noise_root_dir="/content/drive/MyDrive/data_segmented/data_segmented"
+        # noise_data = noise_root_dir / "watermelon.npy"
+        noise = np.load("data_segmented/watermelon.npy", mmap_mode="r")
 
-        
+
         self.samples = []
         for subj in roots:
             subj = Path(subj)
@@ -69,7 +69,7 @@ class EEGDenoiseDataset(Dataset):
         # clean and noise segment from the same channel
         clean_ep = s["clean"][clean_i, ch]
         noise_ep = s["noise"][noise_i,  ch]
-        
+
         # find this channel's adjacent channels
         adjacent_ch1 = chs.index(closest_neighbors[chs[ch]][0])
         adjacent_ch2 = chs.index(closest_neighbors[chs[ch]][1])
@@ -86,12 +86,11 @@ class EEGDenoiseDataset(Dataset):
         y = clean_ep[None].astype(np.float32)
 
         # normalize input
-        #m, sd = x.mean(), x.std() + 1e-8
-        #x = (x - m) / sd
-        m=0
-        sd=1
+        m, sd = x.mean(), x.std() + 1e-8
+        x_norm = (x - m) / sd
+
         return (
-            torch.from_numpy(x),          # mixed+noise input              (shape 2×T)
+            torch.from_numpy(x_norm),          # mixed+noise input              (shape 2×T)
             torch.from_numpy(y),          # clean target                   (shape 1×T)
             torch.tensor(clean_i),
             torch.tensor(noise_i),

@@ -48,7 +48,6 @@ def eeg_read(vhdr_file):
     
     clean_segments = []
     contaminated_segments = []
-    noise_segments = []
 
     # Clean Array Writing
     print('#### Writing Clean Segments ... ####')
@@ -76,27 +75,17 @@ def eeg_read(vhdr_file):
         contaminated_data = epoch_data(contaminated_seg, window_size_time)
         contaminated_segments.append(contaminated_data)
 
-        # Keep only the noise
-        noise_proxy_seg = contaminated_seg.filter(l_freq=100., h_freq=250., fir_design='firwin', verbose=False)
-        noise_data = epoch_data(noise_proxy_seg, window_size_time)
-        noise_segments.append(noise_data)
-
-        del contaminated_seg, noise_proxy_seg, contaminated_data, noise_data
+        del contaminated_seg, contaminated_data
         gc.collect()
 
     # Concatenate all epochs along axis 0 (n_epochs)
     contaminated_segments = np.concatenate(contaminated_segments, axis=0)
-    noise_segments = np.concatenate(noise_segments, axis=0)
 
     # Save subject's contaminated.npy
     out_path = SUBJECT_DIR / 'contaminated.npy'
     np.save(out_path, contaminated_segments)
-
-    # Save subject's noise.npy
-    out_path = SUBJECT_DIR / 'noise.npy'
-    np.save(out_path, noise_segments)
        
-    del contaminated_segments, noise_segments
+    del contaminated_segments
     gc.collect()
 
 def main():
