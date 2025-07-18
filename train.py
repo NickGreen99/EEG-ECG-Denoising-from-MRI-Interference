@@ -2,33 +2,23 @@ import time
 import random
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import matplotlib.pyplot as plt
 from resunet import DeepDSP_UNetRes
 from datasets import EEGDenoiseDataset
-
-class L1L2Loss(nn.Module):
-    def __init__(self, l2_weight: float = 0.1):
-        super().__init__()
-        self.l2_w = l2_weight
-        self.l1   = nn.L1Loss()
-        self.l2   = nn.MSELoss()
-
-    def forward(self, pred, target):
-        return self.l1(pred, target) + self.l2_w * self.l2(pred, target)
+import torch.nn.functional as F
+from transunet import TransUNet2D
 
 def train(
-    root_dir="data_segmented/",
+    root_dir="data_segmented_3/",
     batch_size=32,
     epochs=40,
     lr=2e-4,
     log_dir="runs/denoise",
     val_split=0.1,
-    model_save_path="best_model_noise.pt",
+    model_save_path="best_model_eeg_3_TR_2_sensing.pt",
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device used:", device)
@@ -50,8 +40,8 @@ def train(
     val_dl   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                           num_workers=2, pin_memory=True)
 
-    model     = DeepDSP_UNetRes(in_channels=3, out_channels=1).to(device)
-    criterion = nn.L1Loss().to(device)#L1L2Loss(l2_weight=0.1).to(device)
+    model     = DeepDSP_UNetRes(in_channels=1, out_channels=1).to(device)
+    criterion = nn.L1Loss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -64,19 +54,16 @@ def train(
         model.train()
         running_loss = 0.0
 
-        for batch_idx, (x, y, _, _, m, sd, _) in enumerate(train_dl, 1):
+        for batch_idx, (x, y, _, _, _, _, _) in enumerate(train_dl, 1):
             x, y = x.to(device), y.to(device)
-            m, sd = m.to(device),  sd.to(device)      # (B,) → scalars
-            m  = m.view(-1, 1, 1)                     # (B,1,1)
-            sd = sd.view(-1, 1, 1)                    # (B,1,1)
             
             optimizer.zero_grad()
-            pred_noise = model(x)
+            cleaned_output = model(x)
             
-            cleaned_output = x[:, 0:1, :] - pred_noise # Normalized output
-            cleaned_output_raw = cleaned_output * sd + m # Denormalized output
+            # cleaned_output = x[:, 0:1, :] - pred_noise # Normalized output
+            # cleaned_output_raw = cleaned_output * sd + m # Denormalized output
 
-            loss = criterion(cleaned_output_raw, y)
+            loss = criterion(cleaned_output,y)#combined_loss(cleaned_output, y)
 
             loss.backward()
             optimizer.step()
@@ -100,20 +87,14 @@ def train(
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for x, y, _, _, m, sd , _ in val_dl:
+            for x, y, _, _, _, _, _ in val_dl:
                 x, y = x.to(device), y.to(device)
-                m, sd = m.to(device),  sd.to(device)      # (B,) → scalars
-                m  = m.view(-1, 1, 1)                     # (B,1,1)
-                sd = sd.view(-1, 1, 1)                    # (B,1,1)
             
                 optimizer.zero_grad()
-                pred_noise = model(x)
-            
-                cleaned_output = x[:, 0:1, :] - pred_noise # Normalized output
-                cleaned_output_raw = cleaned_output * sd + m # Denormalized output
+                cleaned_output = model(x)
 
-                loss = criterion(cleaned_output_raw, y)
-                val_loss += criterion(cleaned_output_raw, y).item()
+                loss = criterion(cleaned_output,y)#combined_loss(cleaned_output, y)
+                val_loss += loss.item()
 
         val_epoch_loss = val_loss / len(val_dl)
         writer.add_scalar("Loss/val_epoch", val_epoch_loss, epoch)
