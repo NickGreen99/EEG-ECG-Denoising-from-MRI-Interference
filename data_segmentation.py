@@ -38,7 +38,7 @@ def epoch_data(eeg_segment, window_size_time, overlap=0.0):
 
 def eeg_read(vhdr_file, periods, overlap):
     
-    window_size_time = periods * 0.125 # 3 TR (more context)
+    window_size_time = periods * 0.125 # n * TR (more context)
     
     # read raw recording
     raw = mne.io.read_raw_brainvision(vhdr_file, preload=False)
@@ -50,12 +50,13 @@ def eeg_read(vhdr_file, periods, overlap):
     SUBJECT_DIR = OUTPUT_DIR / str(subject_id)
     SUBJECT_DIR.mkdir(parents=True, exist_ok=True)
 
-    chs = raw.info["ch_names"][0:26]
+    chs = raw.info["ch_names"][0:24]
 
     raw.pick(chs)
     raw.resample(512.)
     raw.set_annotations(None)
-    
+    raw = raw.copy().filter(l_freq=1, h_freq=None, verbose=False)
+
     clean_segments = []
     contaminated_segments = []
 
@@ -122,7 +123,7 @@ def eeg_read_noise(periods, overlap):
     np.save(out_path, noise_data)
 
 def main():
-    periods = 1 # Number of TRs
+    periods = 10 # Number of TRs
     overlap = 0.0
 
     data_paths = glob.glob("current_study_data_raw/H091/H091_scan.vhdr")
@@ -132,10 +133,10 @@ def main():
         print(subject_vhdr)
         eeg_read(subject_vhdr, periods, overlap)
     
-    print('----Watermelon Data Segmentation----')
-    eeg_read_noise(periods, overlap)
+    #print('----Watermelon Data Segmentation----')
+    #eeg_read_noise(periods, overlap)
     
 
 if __name__ == '__main__':
-    OUTPUT_DIR = Path("data_segmented_one_subject_1_TR")
+    OUTPUT_DIR = Path("data_segmented_one_subject_10_TR")
     main()

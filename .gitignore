@@ -2,6 +2,8 @@
 data_raw/
 data_segmented/
 current_study_data_raw/
+data_segmented_one_subject_10_TR_all_channels/
+data_segmented_one_subject_10_TR/
 
 # Ignore tensorboard info
 runs/
