@@ -1,2 +1,2 @@
-# EEG_Cleaning_NaMRI
-EEG Cleaning from Sodium MRI Interference
+# EEG-ECG Denoising from Sodium MRI Interference
+overview.ipynb
